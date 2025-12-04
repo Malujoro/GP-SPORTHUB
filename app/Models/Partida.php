@@ -56,7 +56,7 @@ class Partida extends Model
     public function participantesEspera()
     {
         return $this->belongsToMany(User::class, 'partida_user')
-                    ->wherePivot('status', 'espera')
+                    ->wherePivot('status', 'pendente') // CORRETO
                     ->withPivot('status')
                     ->withTimestamps();
     }
@@ -178,5 +178,29 @@ class Partida extends Model
                 'cor' => $user->id === $this->criador_id ? 'blue' : 'green',
             ];
         });
+    }
+
+    public function scopeProximoDe($query, $latitude, $longitude, $km = 50)
+    {
+        // Constante aproximada para raio da Terra em KM (6371)
+        $haversine = '(6371 * acos(
+        cos(radians(?))
+        * cos(radians(CAST(locais.latitude AS FLOAT)))
+        * cos(radians(CAST(locais.longitude AS FLOAT)) - radians(?))
+        + sin(radians(?))
+        * sin(radians(CAST(locais.latitude AS FLOAT)))
+    ))';
+
+        return $query->select('partidas.*')
+            ->join('locais', 'partidas.local_id', '=', 'locais.id')
+
+            // Cria o campo 'distancia' para usar no front-end
+            ->selectRaw("{$haversine} AS distancia", [$latitude, $longitude, $latitude])
+
+            // Filtra usando a fórmula diretamente
+            ->whereRaw("{$haversine} <= ?", [$latitude, $longitude, $latitude, $km])
+
+            // Ordena pelo alias
+            ->orderBy('distancia', 'asc');
     }
 }

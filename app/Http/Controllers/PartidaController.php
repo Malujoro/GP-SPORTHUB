@@ -4,6 +4,7 @@ namespace App\Http\Controllers;
 
 use App\Models\Local;
 use App\Models\Partida;
+use App\Models\User;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Auth;
 
@@ -31,32 +32,35 @@ class PartidaController extends Controller
     // Lista de partidas já carregada no index
     public function index(Request $request)
     {
-        // // Exemplo: se existir o parâmetro "minhas" na query string
-        // if ($request->has('minhas') && $request->query('minhas') == '1') {
-        //     // Futuramente aqui você pode filtrar as partidas do usuário logado
-        //     return view('minhas-partidas');
-        // }
-
-        // $partidas = Partida::with('local', 'criador')->get();
-
-        // return view('index', compact('partidas'));
-
         $user = Auth::user();
 
-        // Carregar partidas futuras
-        $proximasPartidas = Partida::with('local', 'criador')
-            ->where('data', '>=', now()) 
-            ->orderBy('data', 'asc')
-            ->get();
+        // Inicia a query base para partidas futuras
+        $query = Partida::with('local', 'criador')
+        ->where('data', '>=', now());
+
+        $raioAtual = null;
+
+        // Se a URL tiver ?lat=-23.5&lon=-46.6
+        if ($request->filled('lat') && $request->filled('lon')) {
+            $raioAtual = $request->input('raio', 50);
+
+            $query->proximoDe($request->lat, $request->lon, $raioAtual);
+        } else {
+            // Comportamento padrão: ordena por data
+            $query->orderBy('data', 'asc');
+        }
+
+        // Pega os resultados (limitando a 10 para não carregar demais a home)
+        $proximasPartidas = $query->limit(10)->get();
 
         // Carregar partidas em que o usuário participa
         $minhasPartidas = $user->partidas()
             ->with('local')
-            ->where('data', '>=', now()) 
+            ->where('data', '>=', now())
             ->orderBy('data', 'asc')
             ->get();
 
-        return view('index', compact('proximasPartidas', 'minhasPartidas'));
+        return view('index', compact('proximasPartidas', 'minhasPartidas', 'raioAtual'));
     }
 
     public function minhasPartidas()
@@ -95,6 +99,9 @@ class PartidaController extends Controller
     public function show(Partida $partida)
     {
         $userId = Auth::id();
+
+        // Carregar o local com suas avaliações
+        $partida->load(['local.avaliacoes']);
 
         if ($partida->criador_id === $userId) {
             $statusUsuario = 'organizador';
@@ -136,10 +143,10 @@ class PartidaController extends Controller
     {
         // Verificar se o usuário está participando da partida
         $user = Auth::user();
-        
-        $isParticipating = $partida->participantes()->where('user_id', $user->id)->exists() 
+
+        $isParticipating = $partida->participantes()->where('user_id', $user->id)->exists()
                          || $partida->criador_id === $user->id;
-        
+
         if (!$isParticipating) {
             return redirect()->route('partidas.show', $partida)
                            ->with('error', 'Você precisa estar participando da partida para acessar o chat.');
@@ -150,7 +157,7 @@ class PartidaController extends Controller
 
     // Métodos de interação com a partida
 
-    public function entrar(Partida $partida) 
+    public function entrar(Partida $partida)
     {
         $user = Auth::user();
 
@@ -172,11 +179,13 @@ class PartidaController extends Controller
         // Se pública, entra direto
         if ($partida->tipo === 'publica') {
             $partida->participantes()->attach($user->id, ['status' => 'confirmado']);
+
             return back()->with('success', 'Você entrou na partida!');
         }
 
         // Se privada, envia solicitação
         $partida->participantes()->attach($user->id, ['status' => 'pendente']);
+
         return back()->with('info', 'Solicitação enviada ao organizador.');
     }
 
@@ -185,7 +194,7 @@ class PartidaController extends Controller
         $user = Auth::user();
 
         // Impede o organizador de sair da partida (Precaução)
-            //Obs.: possível erro em: criador_id
+        // Obs.: possível erro em: criador_id
         if ($partida->criador_id === $user->id) {
             return back()->with('info', 'O organizador não pode sair da própria partida!');
         }
@@ -205,4 +214,33 @@ class PartidaController extends Controller
 
         return back()->with('info', 'Solicitação cancelada.');
     }
+    public function aceitar(Partida $partida, User $user)
+    {
+        $partida->aceitarPedido($user->id);
+
+        return back()->with('success', 'Participante aceito.');
+    }
+
+    public function recusar(Partida $partida, User $user)
+{
+    if (auth()->id() !== $partida->criador_id) {
+        abort(403, 'Apenas o organizador pode fazer isso.');
+    }
+
+    $partida->participantes()->detach($user->id);
+
+    return back()->with('success', 'Participante recusado.');
+}
+
+    public function expulsar(Partida $partida, User $user)
+    {
+        if (auth()->id() !== $partida->criador_id) {
+            abort(403, 'Apenas o organizador pode fazer isso.');
+        }
+
+        $partida->participantes()->detach($user->id);
+
+        return back()->with('success', 'Participante expulso da partida.');
+    }
+
 }
